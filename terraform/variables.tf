@@ -15,7 +15,7 @@ variable "rds_instance_type" {
 
 variable "repo_url" {
   description = "Git repository URL"
-  default     = "https://github.com/amilaresidovic/opcija.2.git"
+  default     = "https://github.com/amilaresidovic/opciija2.git"
 }
 
 variable "health_check_timeout" {
