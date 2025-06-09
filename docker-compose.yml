@@ -9,7 +9,6 @@ services:
       - app-network
     depends_on:
       - backend
-    restart: unless-stopped
 
   backend:
     build:
@@ -19,13 +18,11 @@ services:
     volumes:
       - ./backend:/app
     environment:
-      - FLASK_DEBUG=0
+      - FLASK_DEBUG=1
       - FLASK_APP=main.py
-      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/app_db}
     networks:
       - app-network
-    restart: unless-stopped
-    command: python main.py
+    command: flask run --host=0.0.0.0 --port=5000
 
 networks:
   app-network:
