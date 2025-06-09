@@ -16,7 +16,6 @@ provider "aws" {
   region = var.region
 }
 
-
 resource "aws_vpc" "main" {
   cidr_block           = "172.16.0.0/16"
   enable_dns_support   = true
@@ -77,7 +76,6 @@ resource "aws_route_table_association" "public_rt_assoc_b" {
   subnet_id      = aws_subnet.public_subnet_b.id
   route_table_id = aws_route_table.public_rt.id
 }
-
 
 resource "aws_security_group" "frontend_sg" {
   vpc_id = aws_vpc.main.id
@@ -163,7 +161,6 @@ resource "aws_security_group" "rds_sg" {
   tags = { Name = "projekat2-rds-sg" }
 }
 
-
 resource "aws_db_subnet_group" "rds_subnet_group" {
   name       = "projekat2-rds-subnet-group"
   subnet_ids = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
@@ -193,45 +190,11 @@ resource "aws_db_instance" "app_db" {
   }
 }
 
-
-resource "aws_instance" "frontend_instance" {
+resource "aws_instance" "app_instance" {
   ami                    = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
   instance_type          = var.instance_type
   subnet_id              = aws_subnet.public_subnet_a.id
-  vpc_security_group_ids = [aws_security_group.frontend_sg.id]
-  iam_instance_profile   = "LabInstanceProfile"
-  key_name               = "vockey"
-  user_data = <<EOF
-#!/bin/bash
-exec > /var/log/user-data.log 2>&1 
-set -x 
-
-sudo yum update -y
-sudo yum install -y docker git
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo usermod -aG docker ec2-user
-
-git clone ${var.repo_url} /home/ec2-user/projekat2
-cd /home/ec2-user/projekat2/frontend
-
-sudo sed -i "s|http://localhost:5000|http://${aws_lb.app_alb.dns_name}/api|g" src/config.js
-sudo sed -i "s|__ALB_DNS_PLACEHOLDER__|${aws_lb.app_alb.dns_name}|g" vite.config.js
-
-sudo docker build -t frontend .
-sudo docker run -d -p 8080:8080 --name frontend frontend
-EOF
-
-  tags = {
-    Name = "projekat2-frontend-instance"
-  }
-}
-
-resource "aws_instance" "backend_instance" {
-  ami                    = "resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
-  instance_type          = var.instance_type
-  subnet_id              = aws_subnet.public_subnet_b.id
-  vpc_security_group_ids = [aws_security_group.backend_sg.id]
+  vpc_security_group_ids = [aws_security_group.frontend_sg.id, aws_security_group.backend_sg.id]
   iam_instance_profile   = "LabInstanceProfile"
   key_name               = "vockey"
   depends_on             = [aws_db_instance.app_db]
@@ -247,23 +210,31 @@ sudo systemctl start docker
 sudo systemctl enable docker
 sudo usermod -aG docker ec2-user
 
+
+sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
 git clone ${var.repo_url} /home/ec2-user/projekat2
-cd /home/ec2-user/projekat2/backend
+cd /home/ec2-user/projekat2
 
 
-sudo sed -i "s|postgresql://postgres:postgres@db:5432/app_db|postgresql://postgres:postgres@${aws_db_instance.app_db.endpoint}/app_db|g" config.py
+sudo sed -i "s|http://localhost:5000|http://${aws_lb.app_alb.dns_name}/api|g" frontend/src/config.js
+sudo sed -i "s|__ALB_DNS_PLACEHOLDER__|${aws_lb.app_alb.dns_name}|g" frontend/vite.config.js
 
 
-sudo docker build -t backend .
-sudo docker run -d -p 5000:5000 \
-  -e FLASK_APP=main.py \
-  -e DATABASE_URL="postgresql://postgres:postgres@${aws_db_instance.app_db.endpoint}/app_db" \
-  --name backend backend
+export DATABASE_URL="postgresql://postgres:postgres@${aws_db_instance.app_db.endpoint}/app_db"
+
+
+sudo -E /usr/local/bin/docker-compose up -d
+
+
+sleep 120
 EOF
 
-  tags = { Name = "projekat2-backend-instance" }
+  tags = {
+    Name = "projekat2-app-instance"
+  }
 }
-
 
 resource "aws_lb" "app_alb" {
   name               = "projekat2-alb"
@@ -312,13 +283,13 @@ resource "aws_lb_target_group" "backend_tg" {
 
 resource "aws_lb_target_group_attachment" "frontend_tg_attachment" {
   target_group_arn = aws_lb_target_group.frontend_tg.arn
-  target_id        = aws_instance.frontend_instance.id
+  target_id        = aws_instance.app_instance.id
   port             = 8080
 }
 
 resource "aws_lb_target_group_attachment" "backend_tg_attachment" {
   target_group_arn = aws_lb_target_group.backend_tg.arn
-  target_id        = aws_instance.backend_instance.id
+  target_id        = aws_instance.app_instance.id
   port             = 5000
 }
 
@@ -350,15 +321,14 @@ resource "null_resource" "wait_for_health_checks" {
   depends_on = [
     aws_lb_target_group_attachment.frontend_tg_attachment,
     aws_lb_target_group_attachment.backend_tg_attachment,
-    aws_instance.frontend_instance,
-    aws_instance.backend_instance,
+    aws_instance.app_instance,
     aws_db_instance.app_db
   ]
 
   provisioner "local-exec" {
     command = <<-EOT
-      echo "Čekam da EC2 instance budu spremne..."
-      sleep 120
+      echo "Čekam da EC2 instanca bude spremna..."
+      sleep 180
       
       echo "Provjeram health status target grupa..."
       TIMEOUT=$(($(date +%s) + ${var.health_check_timeout * 60}))
